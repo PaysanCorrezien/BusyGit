@@ -2,6 +2,7 @@ import os
 from typing import List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .repo_status import RepoStatus
+from .status import RepoStatusLocal, SyncStatus, SyncStatusType
 from utils import is_git_repo
 from .git_cache import GitCache
 from enum import Enum, auto
@@ -116,7 +117,7 @@ class GitManager:
         use_ssh_agent: bool,
         fetch_https_status: bool,
         refresh_mode: RefreshMode = RefreshMode.SMART,
-    ) -> tuple[str, str, str, str]:
+    ) -> Tuple[str, RepoStatusLocal, str, SyncStatus]:
         """Get status information for a specific repository."""
         try:
             if refresh_mode == RefreshMode.CACHED:
@@ -127,12 +128,12 @@ class GitManager:
                         self.log_manager.debug(
                             f"Using fully cached status for: {repo_path}"
                         )
-                    return (
-                        repo_path,
-                        cached.status,
-                        cached.remote_url,
-                        cached.sync_status,
-                    )
+                    # Convert cached strings to enum types
+                    from .status import StatusParser
+
+                    repo_status = StatusParser.parse_repo_status(cached.status)
+                    sync_status = StatusParser.parse_sync_status(cached.sync_status)
+                    return (repo_path, repo_status, cached.remote_url, sync_status)
 
             # Always get fresh local status in SMART and FULL modes
             repo_status = RepoStatus(
@@ -140,7 +141,7 @@ class GitManager:
                 use_ssh_agent=use_ssh_agent,
                 fetch_https_status=fetch_https_status,
             )
-            status = repo_status.status
+            status = repo_status.repo_status  # Now returns RepoStatusLocal enum
 
             if refresh_mode == RefreshMode.SMART:
                 # Try to use cached remote status
@@ -150,14 +151,17 @@ class GitManager:
                         self.log_manager.debug(
                             f"Using cached remote status for: {repo_path}"
                         )
-                    remote_url, sync_status = cached_remote
+                    remote_url, sync_status_str = cached_remote
+                    sync_status = StatusParser.parse_sync_status(sync_status_str)
                 else:
                     remote_url, sync_status = self._get_fresh_remote_status(repo_status)
             else:  # FULL refresh
                 remote_url, sync_status = self._get_fresh_remote_status(repo_status)
 
-            # Cache the results
-            self.cache.update_repo_status(repo_path, status, remote_url, sync_status)
+            # Cache the results (convert enums to strings for cache)
+            self.cache.update_repo_status(
+                repo_path, status.name, remote_url, str(sync_status)
+            )
             return (repo_path, status, remote_url, sync_status)
 
         except Exception as e:
@@ -165,7 +169,12 @@ class GitManager:
                 self.log_manager.error(
                     f"Error getting status for {repo_path}: {str(e)}"
                 )
-            return (repo_path, "Error", "Error", "Error")
+            return (
+                repo_path,
+                RepoStatusLocal.ERROR,
+                "Error",
+                SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
+            )
 
     def process_repositories_parallel(
         self,
@@ -173,7 +182,7 @@ class GitManager:
         use_ssh_agent: bool,
         fetch_https_status: bool,
         mode: RefreshMode = RefreshMode.SMART,
-    ) -> List[tuple[str, str, str, str]]:
+    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
         """Process multiple repositories in parallel."""
         start_time = None
         if self.log_manager:
@@ -209,7 +218,14 @@ class GitManager:
                         self.log_manager.error(
                             f"Error processing repository {path}: {str(e)}"
                         )
-                    results.append((path, "Error", "Error", "Error"))
+                    results.append(
+                        (
+                            path,
+                            RepoStatusLocal.ERROR,
+                            "Error",
+                            SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
+                        )
+                    )
 
         if self.log_manager and start_time:
             processing_time = time() - start_time
@@ -221,7 +237,7 @@ class GitManager:
 
     def get_all_repositories(
         self, mode: RefreshMode = RefreshMode.SMART
-    ) -> List[tuple[str, str, str, str]]:
+    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
         """Get all repositories and their status information."""
         # Reload settings
         self.settings_manager.load_settings()
@@ -291,13 +307,15 @@ class GitManager:
         # Return the sorted results
         return sorted(repos_data, key=lambda x: x[0].lower())
 
-    def _get_fresh_remote_status(self, repo_status: RepoStatus) -> tuple[str, str]:
+    def _get_fresh_remote_status(
+        self, repo_status: RepoStatus
+    ) -> Tuple[str, SyncStatus]:
         """Get fresh remote status information."""
         return repo_status.remote_url, repo_status.get_sync_status()
 
     def refresh_repositories(
         self, mode: RefreshMode = RefreshMode.SMART
-    ) -> List[tuple[str, str, str, str]]:
+    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
         """
         Refresh and return status for all repositories.
 

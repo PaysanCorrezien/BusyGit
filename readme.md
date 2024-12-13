@@ -25,7 +25,12 @@ Git Tracker TUI is a terminal user interface (TUI) application built with Python
 - [ ] Add searchable repository list for quick focus
 - [ ] Add `open` command to launch $EDITOR in repository
 - [ ] Add `git` command to launch lazygit (configurable) in repository
+- [ ] make these command configurable via setttings
+- [x] create enum for remote_status and refactor for it
+- [x] create enum for local status and refactor for it
+- [ ] use these as reference for styling the datatable
 - [ ] Improve repository list visualization with color codes and icons
+- [ ] make the first load not show error but keep empty with a loading animation under infos are ready
 
 ### Backlog
 

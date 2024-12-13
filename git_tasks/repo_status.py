@@ -1,10 +1,14 @@
 from git import Repo, InvalidGitRepositoryError, NoSuchPathError
 import os
 from typing import List, Tuple, Optional
+from pathlib import Path
 from urllib.parse import urlparse
+from .status import RepoStatusLocal, SyncStatus, SyncStatusType
 
 
 class RepoStatus:
+    """Class to handle Git repository status using enum-based status types."""
+
     def __init__(
         self,
         repo_path: str,
@@ -21,9 +25,6 @@ class RepoStatus:
 
     def is_remote_url_ssh(self, url: str) -> bool:
         """Check if the remote URL is SSH."""
-        # SSH URLs can be in format:
-        # - git@github.com:user/repo.git
-        # - ssh://git@github.com/user/repo.git
         return url.startswith(("git@", "ssh://"))
 
     def should_check_remote_status(self, remote_url: str) -> bool:
@@ -37,20 +38,14 @@ class RepoStatus:
         )
 
     @property
-    def is_dirty(self) -> bool:
-        """Check if repository has uncommitted changes."""
+    def repo_status(self) -> RepoStatusLocal:
+        """Get repository status as enum."""
         try:
-            return self.repo.is_dirty(untracked_files=True)
+            if self.repo.is_dirty(untracked_files=True):
+                return RepoStatusLocal.DIRTY
+            return RepoStatusLocal.CLEAN
         except Exception as e:
-            return f"Error checking if repository is dirty: {str(e)}"
-
-    @property
-    def status(self) -> str:
-        """Get repository status (Clean/Modified)."""
-        try:
-            return "Modified" if self.is_dirty else "Clean"
-        except Exception as e:
-            return f"Error getting repository status: {str(e)}"
+            return RepoStatusLocal.ERROR
 
     @property
     def remote_url(self) -> str:
@@ -70,31 +65,29 @@ class RepoStatus:
         except Exception as e:
             return f"Error: {str(e)}"
 
-    def get_sync_status(self) -> str:
-        """Get synchronization status with remote."""
+    def get_sync_status(self) -> SyncStatus:
+        """Get synchronization status with remote using SyncStatus object."""
         try:
             if not self.repo.remotes:
-                return "No remote configured"
+                return SyncStatus(type=SyncStatusType.NO_REMOTE)
 
             remote_url = self.remote_url
             if not self.should_check_remote_status(remote_url):
                 is_ssh = self.is_remote_url_ssh(remote_url)
                 if is_ssh and not self.use_ssh_agent:
-                    return "SSH status check disabled"
+                    return SyncStatus(type=SyncStatusType.DISABLED_SSH)
                 elif not is_ssh and not self.fetch_https_status:
-                    return "HTTPS status check disabled"
-                return "Remote status check disabled"
+                    return SyncStatus(type=SyncStatusType.DISABLED_HTTPS)
+                return SyncStatus(type=SyncStatusType.DISABLED_GENERAL)
 
             origin = self.repo.remotes.origin
-
-            # Fetch from remote to get latest state
             origin.fetch()
 
             active_branch = self.repo.active_branch
             tracking_branch = active_branch.tracking_branch()
 
             if not tracking_branch:
-                return "No upstream branch"
+                return SyncStatus(type=SyncStatusType.NO_UPSTREAM)
 
             commits_behind = list(
                 self.repo.iter_commits(f"{active_branch.name}..{tracking_branch.name}")
@@ -107,20 +100,29 @@ class RepoStatus:
             behind_count = len(commits_behind)
 
             if ahead_count == 0 and behind_count == 0:
-                return "Synced"
+                return SyncStatus(type=SyncStatusType.SYNCED)
             elif ahead_count > 0 and behind_count > 0:
-                return f"Diverged (↑{ahead_count} ↓{behind_count})"
+                return SyncStatus(
+                    type=SyncStatusType.DIVERGED,
+                    ahead_count=ahead_count,
+                    behind_count=behind_count,
+                )
             elif ahead_count > 0:
-                return f"Ahead by {ahead_count}"
+                return SyncStatus(type=SyncStatusType.AHEAD, ahead_count=ahead_count)
             else:
-                return f"Behind by {behind_count}"
+                return SyncStatus(type=SyncStatusType.BEHIND, behind_count=behind_count)
 
         except Exception as e:
-            return f"Error: {str(e)}"
+            return SyncStatus(type=SyncStatusType.ERROR, error_message=str(e))
 
-    def get_status_info(self) -> Tuple[str, str, str, str]:
+    def get_status_info(self) -> Tuple[str, RepoStatusLocal, str, SyncStatus]:
         """Get all status information for the repository."""
-        return (self.repo_path, self.status, self.remote_url, self.get_sync_status())
+        return (
+            self.repo_path,
+            self.repo_status,
+            self.remote_url,
+            self.get_sync_status(),
+        )
 
     @staticmethod
     def find_git_repos(
