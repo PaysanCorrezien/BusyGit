@@ -6,6 +6,7 @@ import os
 import subprocess
 from git_tasks.log_manager import LogManager
 from git_tasks.status import RepoStatusLocal, SyncStatusType, SyncStatus
+from git_tasks.remote_convert import RemoteConverter
 
 
 class RepoDataTable(DataTable):
@@ -45,6 +46,7 @@ class RepoDataTable(DataTable):
         Binding("ctrl+g", "open_gitclient", "Open Git Client", show=True),
         Binding("ctrl+o", "open_editor", "Open Editor", show=True),
         Binding("ctrl+u", "open_remote_url", "Open Remote URL", show=True),
+        Binding("ctrl+r", "convert_remote_url", "Convert Remote URL", show=True),
         Binding("k", "cursor_up", show=False),
         Binding("j", "cursor_down", show=False),
     ]
@@ -194,3 +196,27 @@ class RepoDataTable(DataTable):
             return remote_url
 
         return ""
+
+    async def action_convert_remote_url(self) -> None:
+        """Convert the remote URL between HTTPS and SSH formats."""
+        try:
+            row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+            repo_path = self.get_row(row_key)[0].plain
+            current_url = self.get_row(row_key)[2].plain
+
+            # Initialize converter
+            converter = RemoteConverter(self.log_manager)
+
+            # Convert URL
+            new_url = converter.convert_url(current_url)
+            if not new_url:
+                return
+
+            # Update remote URL
+            if converter.update_remote_url(repo_path, new_url):
+                # Refresh the data to show the new URL
+                self.app.refresh_data()
+                self.notify(f"{repo_path} updated to {new_url} !")
+
+        except Exception as e:
+            self.log_manager.error(f"Error converting remote URL: {str(e)}")
