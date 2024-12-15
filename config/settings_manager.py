@@ -1,140 +1,142 @@
 import os
 import json
-from typing import Optional, List
+import logging
+from typing import List, Dict, Optional
 from pathlib import Path
-from .settings import Settings
-from utils import is_git_repo
-from dataclasses import dataclass, asdict
-from git_tasks.log_manager import LogManager
+from .settings import Settings, CommandConfig, BindingConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsManager:
-    DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/git-tracker/config.json")
-    DEFAULT_SETTINGS = Settings(
-        watched_paths=[],
-        auto_refresh_interval=300,
-        max_depth=3,
-        show_hidden=False,
-        theme="tokyo-night",
-    )
+    """Manages application settings with file persistence."""
 
-    def __init__(self, config_path: Optional[str] = None):
-        self.config_path = config_path or self.DEFAULT_CONFIG_PATH
-        self._settings = None
-        self._ensure_config_dir()
-        self.log_manager = LogManager(
-            os.path.dirname(self.config_path)
-        )  # Share the same config directory
+    def __init__(self, config_path: str = None):
+        self.config_path = config_path or os.path.expanduser(
+            "~/.config/git-tracker/config.json"
+        )
+        self.settings = Settings()  # Start with defaults from Settings class
         self.load_settings()
 
-    def _ensure_config_dir(self) -> None:
-        """Ensure the configuration directory exists."""
-        config_dir = os.path.dirname(self.config_path)
-        os.makedirs(config_dir, exist_ok=True)
-
     def load_settings(self) -> None:
-        """Load settings from the configuration file."""
+        """Load settings from file, overriding defaults where specified."""
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, "r") as f:
-                    data = json.load(f)
-                    if not data:  # Check if the data is empty
-                        self._settings = self.DEFAULT_SETTINGS
-                    else:
-                        # Convert dictionary to Settings object
-                        self._settings = Settings(**data)
+                    config_data = json.load(f)
+
+                    # Handle command configurations
+                    if "commands" in config_data:
+                        config_data["commands"] = {
+                            k: CommandConfig(**v) if isinstance(v, dict) else v
+                            for k, v in config_data["commands"].items()
+                        }
+
+                    # Handle custom key bindings
+                    if "bindings" in config_data:
+                        # Convert dictionary values to BindingConfig objects
+                        custom_bindings = {}
+                        for action, binding_data in config_data["bindings"].items():
+                            if isinstance(binding_data, dict):
+                                custom_bindings[action] = BindingConfig(**binding_data)
+                            else:
+                                custom_bindings[action] = binding_data
+                        self.settings.custom_bindings = custom_bindings
+
+                    # Update settings with config file values
+                    for key, value in config_data.items():
+                        if hasattr(self.settings, key) and key != "bindings":
+                            setattr(self.settings, key, value)
+
+                logger.info(f"Settings loaded from {self.config_path}")
             else:
-                # Create default settings file if it doesn't exist
-                self._settings = self.DEFAULT_SETTINGS
-                self.save_settings()  # Save default settings
-        except (json.JSONDecodeError, ValueError, TypeError):
-            print("Error loading settings: Invalid settings format.")
-            self._settings = self.DEFAULT_SETTINGS  # Use default settings
-            self.save_settings()  # Create a new settings file with default values
+                self.save_settings()  # Save defaults if no config exists
+                logger.info("Default settings created")
         except Exception as e:
-            print(f"Error loading settings: {e}")
-            self._settings = (
-                self.DEFAULT_SETTINGS
-            )  # Use default settings if loading fails
+            logger.error(f"Error loading settings: {e}")
+            # Keep defaults if loading fails
 
     def save_settings(self) -> None:
-        """Save current settings to the configuration file."""
+        """Save current settings to file."""
         try:
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+
+            # Prepare settings dict
+            settings_dict = {}
+            for field in self.settings.__dataclass_fields__:
+                if field != "BINDINGS":  # Skip the bindings property
+                    value = getattr(self.settings, field)
+                    if field == "custom_bindings":
+                        # Convert BindingConfig objects to dictionaries
+                        settings_dict["bindings"] = {
+                            k: vars(v) if isinstance(v, BindingConfig) else v
+                            for k, v in value.items()
+                        }
+                    else:
+                        settings_dict[field] = value
+
             with open(self.config_path, "w") as f:
-                json.dump(asdict(self._settings), f, indent=4)
+                json.dump(settings_dict, f, indent=2, default=lambda x: vars(x))
+
+            logger.info(f"Settings saved to {self.config_path}")
         except Exception as e:
-            print(f"Error saving settings: {e}")
+            logger.error(f"Error saving settings: {e}")
 
-    def update_settings(self, **kwargs) -> None:
-        """Update settings with new values."""
-        current_settings = asdict(self._settings)
-        current_settings.update(kwargs)
-        self._settings = Settings(**current_settings)
-        self.save_settings()
-
-    @property
-    def settings(self) -> Settings:
-        """Get current settings."""
-        return self._settings
+    def get_watched_paths(self) -> List[str]:
+        """Get list of watched paths."""
+        return self.settings.watched_paths
 
     def add_watched_path(self, path: str) -> None:
         """Add a new path to watch."""
         if path not in self.settings.watched_paths:
             self.settings.watched_paths.append(path)
             self.save_settings()
-            self.log_manager.info(f"Added new watched path: {path}")
-            self.log_manager.info(f"Current watched paths: {self.settings.watched_paths}")
-        else:
-            self.log_manager.warning(f"Path already exists in watched paths: {path}")
 
     def remove_watched_path(self, path: str) -> None:
         """Remove a path from watch list."""
-        expanded_path = os.path.expanduser(path)
-        if expanded_path in self._settings.watched_paths:
-            self._settings.watched_paths.remove(expanded_path)
+        if path in self.settings.watched_paths:
+            self.settings.watched_paths.remove(path)
             self.save_settings()
-
-    def get_repository_paths(self) -> List[str]:
-        """Get all repository paths from watched directories."""
-        repo_paths = []
-
-        for path in self._settings.watched_paths:
-            expanded_path = os.path.expanduser(path)
-            if not os.path.exists(expanded_path):
-                continue
-
-            # Check if the path itself is a git repository
-            if is_git_repo(expanded_path):
-                repo_paths.append(expanded_path)
-            else:
-                # Find git repositories under this path
-                max_depth = self._settings.max_depth
-                base_depth = len(Path(expanded_path).parts)
-
-                for root, dirs, _ in os.walk(expanded_path):
-                    # Skip hidden directories unless configured otherwise
-                    if not self._settings.show_hidden:
-                        dirs[:] = [d for d in dirs if not d.startswith(".")]
-
-                    # Check depth
-                    current_depth = len(Path(root).parts) - base_depth
-                    if current_depth > max_depth:
-                        dirs.clear()  # Stop descending
-                        continue
-
-                    if ".git" in dirs:
-                        repo_paths.append(root)
-                        dirs.remove(".git")  # Don't descend into .git directories
-
-        return sorted(set(repo_paths))  # Remove duplicates and sort
-
-    def get_watched_paths(self) -> List[str]:
-        """Get list of watched paths."""
-        return self._settings.watched_paths
 
     def set_theme(self, theme: str) -> None:
-        """Set the theme and save it."""
-        if theme != self._settings.theme:  # Only update if theme actually changed
-            self._settings.theme = theme
-            self.save_settings()
-            print(f"Theme saved: {theme}")  # Debug print to confirm saving
+        """Set the UI theme."""
+        self.settings.theme = theme
+        self.save_settings()
+
+    def update_settings(self, **kwargs) -> None:
+        """Update multiple settings at once."""
+        for key, value in kwargs.items():
+            if hasattr(self.settings, key):
+                setattr(self.settings, key, value)
+        self.save_settings()
+
+    def get_binding_key(self, component: str, action: str) -> str:
+        """Get the key binding for a specific component and action.
+
+        Args:
+            component: The component identifier (e.g., 'repo_table')
+            action: The action identifier (e.g., 'cursor_up')
+
+        Returns:
+            str: The key binding (e.g., 'k' or 'ctrl+g')
+        """
+        # First check custom bindings
+        binding_config = self.settings.get_binding(action)
+        if binding_config and binding_config.component == component:
+            return binding_config.key
+
+        # Fall back to default bindings if no custom binding found
+        defaults = {
+            "repo_table": {
+                "cursor_up": "k",
+                "cursor_down": "j",
+                "open_gitclient": "ctrl+g",
+                "open_editor": "ctrl+o",
+                "open_remote_url": "ctrl+u",
+            },
+            "repo_table_search": {
+                "focus_search": "f",
+            },
+        }
+
+        return defaults.get(component, {}).get(action, "")

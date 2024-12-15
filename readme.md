@@ -22,10 +22,10 @@ Git Tracker TUI is a terminal user interface (TUI) application built with Python
 
 ### Priority
 
-- [ ] Add searchable repository list for quick focus
-- [ ] Add `open` command to launch $EDITOR in repository
-- [ ] Add `git` command to launch lazygit (configurable) in repository
-- [ ] make these command configurable via setttings
+- [x] Add searchable repository list for quick focus
+- [x] Add `open` command to launch $EDITOR in repository
+- [x] Add `git` command to launch lazygit (configurable) in repository
+- [x] make these command configurable via setttings
 - [x] create enum for remote_status and refactor for it
 - [x] create enum for local status and refactor for it
 - [ ] use these as reference for styling the datatable
@@ -51,6 +51,7 @@ Git Tracker TUI is a terminal user interface (TUI) application built with Python
 - [ ] Display total number of managed repositories in main UI
 - [ ] Improve configuration
 - [ ] Optimize refresh triggers (avoid full refresh when possible) -> fix the settings triggering full refresh
+- [ ] make the open repo in browser work in input ( ctrl u alreadu used)
 - [ ] Implement dashboard view
 
 ## Contributing

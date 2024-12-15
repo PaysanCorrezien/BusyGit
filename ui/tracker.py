@@ -1,6 +1,6 @@
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.widgets import DataTable, Header, Input, Footer, Tabs, Tab
+from textual.widgets import Header, Footer, Tabs, Tab, Input
 from textual.binding import Binding
 from textual import work
 from config.settings_manager import SettingsManager
@@ -10,10 +10,10 @@ from ui.components.settings_view import SettingsView
 from ui.toast_app import ToastApp
 from textual.message import Message
 from textual import events
-from ui.components.repo_data_table import RepoDataTable
 from git_tasks.log_manager import LogManager
 from ui.components.log_view import LogView
 from git_tasks.git_manager import RefreshMode
+from ui.components.repo_data_table_search import RepoDataTableSearch
 
 
 class ThemeChanged(Message):
@@ -30,7 +30,7 @@ class GitTrackerApp(App):
         dock: top;
     }
 
-    DataTable {
+    RepoDataTableSearch {
         height: 1fr;
         margin: 1 0;
     }
@@ -73,9 +73,29 @@ class GitTrackerApp(App):
         # Initialize log view
         self.log_view = None
 
-        # Do an initial repository scan in background after app is mounted
         self.log_manager.info("GitTrackerApp initialized with theme: %s", self.theme)
 
+    # def compose(self) -> ComposeResult:
+    #     yield Header()
+    #     yield Tabs(
+    #         Tab("Repositories", id="repositories"),
+    #         Tab("Settings", id="settings"),
+    #         Tab("Logs", id="logs"),
+    #     )
+    #     # Container for repositories tab
+    #     with Container(id="repositories-content"):
+    #         self.repo_table_search = RepoDataTableSearch(self.log_manager)
+    #         yield self.repo_table_search
+    #
+    #     # Container for settings tab
+    #     with Container(id="settings-content", classes="hide"):
+    #         yield SettingsView(self.settings_manager, self.log_manager)
+    #
+    #     # Container for logs tab
+    #     with Container(id="logs-content", classes="hide"):
+    #         pass  # LogView will be added dynamically
+    #
+    #     yield Footer()
     def compose(self) -> ComposeResult:
         yield Header()
         yield Tabs(
@@ -85,9 +105,11 @@ class GitTrackerApp(App):
         )
         # Container for repositories tab
         with Container(id="repositories-content"):
-            self.repo_data_table = RepoDataTable(self.log_manager)
-            yield self.repo_data_table
-            yield Input(placeholder="Search repositories...", id="search")
+            self.repo_table_search = RepoDataTableSearch(
+                log_manager=self.log_manager,
+                settings_manager=self.settings_manager,  # Pass settings_manager here
+            )
+            yield self.repo_table_search
 
         # Container for settings tab
         with Container(id="settings-content", classes="hide"):
@@ -101,9 +123,11 @@ class GitTrackerApp(App):
 
     def on_mount(self) -> None:
         """Handle app mounting"""
-        self.repo_data_table.focus()
-        self.log_manager.info("App mounted, focusing on repository data table.")
-        # Only call load_initial_data, not refresh_data
+        self.log_manager.info("App mounted")
+        # Start with repositories tab
+        self.query_one(Tabs).active = "repositories"
+        # Focus the table within the search component
+        self.repo_table_search.focus_table()
         self.load_initial_data()
 
     @work(thread=True)
@@ -113,7 +137,7 @@ class GitTrackerApp(App):
         repos_data = self.git_manager.get_all_repositories()
 
         def update_ui():
-            self.repo_data_table.update_table(repos_data)
+            self.repo_table_search.update_table(repos_data)
             self.log_manager.info("Initial repository data loaded successfully.")
 
         self.call_after_refresh(update_ui)
@@ -150,7 +174,6 @@ class GitTrackerApp(App):
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         """Handle tab switching"""
         self.log_manager.info("Tab activated: %s", event.tab.id)
-        # Get all content containers
         repos_content = self.query_one("#repositories-content")
         settings_content = self.query_one("#settings-content")
         logs_content = self.query_one("#logs-content")
@@ -173,36 +196,24 @@ class GitTrackerApp(App):
             self.log_view.focus()
         else:  # repositories tab
             repos_content.remove_class("hide")
-            self.repo_data_table.focus()
-            # Use cached refresh when switching back to repositories
+            self.repo_table_search.focus()
             self.refresh_data(mode=RefreshMode.CACHED)
 
     @work(thread=True)
     def refresh_data(self, mode: RefreshMode = RefreshMode.FULL):
-        """
-        Refresh repository data in background
-
-        Args:
-            mode: RefreshMode determining refresh type:
-                CACHED - Use cached data (for UI updates)
-                SMART - Check local changes but use cached remote status
-                FULL - Complete refresh (default for manual refresh)
-        """
+        """Refresh repository data in background"""
         self.log_manager.info(
             f"Starting to refresh repository data (mode: {mode.name})"
         )
 
-        # Force reload settings before getting repositories
         self.settings_manager.load_settings()
         self.log_manager.info("Settings reloaded.")
 
-        # Fetch the latest repository data with specified mode
         repos_data = self.git_manager.refresh_repositories(mode=mode)
         self.log_manager.info(f"Retrieved repository data with mode {mode.name}")
 
         def update_ui():
-            self.repo_data_table.clear()
-            self.repo_data_table.update_table(repos_data)
+            self.repo_table_search.update_table(repos_data)
             self.notify(f"{mode.name} refresh complete!")
             self.log_manager.info("UI updated with new repository data.")
 
@@ -219,13 +230,13 @@ class GitTrackerApp(App):
         self.git_manager.add_watched_path(path)
         self.settings_manager.load_settings()
         self.log_manager.info("Path added, starting smart refresh")
-        self.refresh_data(mode=RefreshMode.SMART)  # Smart refresh for path changes
+        self.refresh_data(mode=RefreshMode.SMART)
 
     def action_remove_path(self, path: str) -> None:
         """Remove a path from the settings and refresh the UI."""
         self.log_manager.info("Removing path: %s", path)
         self.settings_manager.remove_watched_path(path)
-        self.refresh_data(mode=RefreshMode.SMART)  # Smart refresh for path changes
+        self.refresh_data(mode=RefreshMode.SMART)
 
     def action_focus_path(self) -> None:
         """Switch to settings tab when 'p' is pressed"""
@@ -242,8 +253,9 @@ class GitTrackerApp(App):
         tabs = self.query_one(Tabs)
         tabs.active = "logs"
 
-    def action_focus_search(self):
-        self.query_one("#search").focus()
+    def action_focus_search(self) -> None:
+        """Focus the search input in the repository table"""
+        self.repo_table_search.action_focus_search()
 
 
 if __name__ == "__main__":
