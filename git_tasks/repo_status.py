@@ -115,13 +115,14 @@ class RepoStatus:
         except Exception as e:
             return SyncStatus(type=SyncStatusType.ERROR, error_message=str(e))
 
-    def get_status_info(self) -> Tuple[str, RepoStatusLocal, str, SyncStatus]:
+    def get_status_info(self) -> Tuple[str, RepoStatusLocal, str, SyncStatus, str]:
         """Get all status information for the repository."""
         return (
             self.repo_path,
             self.repo_status,
             self.remote_url,
             self.get_sync_status(),
+            self.current_branch,
         )
 
     @staticmethod

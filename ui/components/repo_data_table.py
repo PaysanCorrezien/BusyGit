@@ -85,18 +85,19 @@ class RepoDataTable(DataTable):
         self.clear()
         self.log_manager.info(f"Updating table with data: {repos_data}")
 
-        for repo_path, status, remote, sync_status, *rest in repos_data:
+        for repo_path, status, remote, sync_status, branch in repos_data:
             styled_path = Text(repo_path, style="bright_blue")
             styled_status = self.style_repo_status(status)
             styled_remote = Text(remote, style="cyan")
             styled_sync = self.style_sync_status(sync_status)
+            styled_branch = Text(branch if branch else "", style="bright_magenta")
 
             self.add_row(
                 styled_path,
                 styled_status,
                 styled_remote,
                 styled_sync,
-                rest[0] if rest else "",  # Branch column
+                styled_branch,
             )
 
     async def action_open_remote_url(self) -> None:

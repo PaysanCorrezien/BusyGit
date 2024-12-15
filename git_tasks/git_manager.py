@@ -183,7 +183,7 @@ class GitManager:
         fetch_https_status: bool,
         mode: RefreshMode,
         progress_callback=None,
-    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
+    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus, str]]:
         """Process repositories in parallel with optional progress reporting."""
         results = []
         processed = 0
@@ -224,6 +224,7 @@ class GitManager:
                             RepoStatusLocal.ERROR,
                             str(e),
                             SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
+                            "Error",
                         )
                     )
 
@@ -231,7 +232,7 @@ class GitManager:
 
     def get_all_repositories(
         self, mode: RefreshMode = RefreshMode.SMART, progress_callback=None
-    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
+    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus, str]]:
         """Get all repositories with progress tracking."""
         # Reload settings
         self.settings_manager.load_settings()
@@ -273,7 +274,7 @@ class GitManager:
 
     def refresh_repositories(
         self, mode: RefreshMode = RefreshMode.FULL, progress_callback=None
-    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
+    ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus, str]]:
         """Refresh and return status for all repositories."""
         if self.log_manager:
             self.log_manager.debug(
@@ -298,7 +299,7 @@ class GitManager:
         with ThreadPoolExecutor() as executor:
             future_to_path = {
                 executor.submit(
-                    self.get_repository_status,  # Using the correct method name
+                    self._process_single_repo,
                     path,
                     self.settings_manager.settings.use_ssh_agent,
                     self.settings_manager.settings.fetch_https_status,
@@ -323,6 +324,7 @@ class GitManager:
                             RepoStatusLocal.ERROR,
                             str(e),
                             SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
+                            "Error",
                         )
                     )
 
@@ -356,7 +358,7 @@ class GitManager:
         use_ssh_agent: bool,
         fetch_https_status: bool,
         mode: RefreshMode,
-    ) -> Tuple[str, RepoStatusLocal, str, SyncStatus]:
+    ) -> Tuple[str, RepoStatusLocal, str, SyncStatus, str]:
         """Process a single repository and return its status."""
         try:
             repo_status = RepoStatus(
@@ -364,8 +366,14 @@ class GitManager:
                 use_ssh_agent=use_ssh_agent,
                 fetch_https_status=fetch_https_status,
             )
-            # Just use the existing get_status_info method
-            return repo_status.get_status_info()
+            # Get status info directly from properties
+            return (
+                repo_status.repo_path,
+                repo_status.repo_status,
+                repo_status.remote_url,
+                repo_status.get_sync_status(),
+                repo_status.current_branch,
+            )
 
         except Exception as e:
             if self.log_manager:
@@ -377,4 +385,5 @@ class GitManager:
                 RepoStatusLocal.ERROR,
                 str(e),
                 SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
+                "Error",
             )
