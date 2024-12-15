@@ -181,21 +181,18 @@ class GitManager:
         repo_paths: List[str],
         use_ssh_agent: bool,
         fetch_https_status: bool,
-        mode: RefreshMode = RefreshMode.SMART,
+        mode: RefreshMode,
+        progress_callback=None,
     ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
-        """Process multiple repositories in parallel."""
-        start_time = None
-        if self.log_manager:
-            from time import time
-
-            start_time = time()
-            self.log_manager.debug(f"Processing repositories in {mode.name} mode")
-
+        """Process repositories in parallel with optional progress reporting."""
         results = []
+        processed = 0
+        total = len(repo_paths)
+
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_path = {
                 executor.submit(
-                    self.get_repository_status,
+                    self._process_single_repo,
                     path,
                     use_ssh_agent,
                     fetch_https_status,
@@ -209,102 +206,63 @@ class GitManager:
                 try:
                     result = future.result()
                     results.append(result)
-                    if self.log_manager:
-                        self.log_manager.debug(
-                            f"Successfully processed repository: {path}"
-                        )
+                    processed += 1
+
+                    # Report progress if callback provided
+                    if progress_callback:
+                        progress_callback(processed, total)
+
                 except Exception as e:
                     if self.log_manager:
                         self.log_manager.error(
-                            f"Error processing repository {path}: {str(e)}"
+                            f"Error processing repo {path}: {str(e)}"
                         )
+                    # Add error status
                     results.append(
                         (
                             path,
                             RepoStatusLocal.ERROR,
-                            "Error",
+                            str(e),
                             SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
                         )
                     )
 
-        if self.log_manager and start_time:
-            processing_time = time() - start_time
-            self.log_manager.debug(
-                f"Repository status processing completed in {processing_time:.2f} seconds"
-            )
-
         return results
 
     def get_all_repositories(
-        self, mode: RefreshMode = RefreshMode.SMART
+        self, mode: RefreshMode = RefreshMode.SMART, progress_callback=None
     ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
-        """Get all repositories and their status information."""
+        """Get all repositories with progress tracking."""
         # Reload settings
         self.settings_manager.load_settings()
-        if self.log_manager:
-            self.log_manager.debug(f"Getting all repositories (mode: {mode.name})")
-
-        # Get settings
         watched_paths = self.settings_manager.get_watched_paths()
         max_depth = self.settings_manager.settings.max_depth
         show_hidden = self.settings_manager.settings.show_hidden
         use_ssh_agent = self.settings_manager.settings.use_ssh_agent
         fetch_https_status = self.settings_manager.settings.fetch_https_status
 
-        if self.log_manager:
-            self.log_manager.debug(
-                f"Processing paths with settings: "
-                f"max_depth={max_depth}, "
-                f"show_hidden={show_hidden}, "
-                f"use_ssh_agent={use_ssh_agent}, "
-                f"fetch_https_status={fetch_https_status}"
-            )
-
-        # Step 1: Discover repositories in parallel
-        start_time = None
-        if self.log_manager:
-            self.log_manager.debug("Starting parallel repository discovery")
-            from time import time
-
-            start_time = time()
-
+        # Discovery phase
         all_repo_paths = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit scan tasks for each watched path
             future_to_path = {
                 executor.submit(self.scan_directory, path, max_depth, show_hidden): path
                 for path in watched_paths
             }
 
-            # Collect results as they complete
+            # Collect results
             for future in as_completed(future_to_path):
-                path = future_to_path[future]
                 try:
                     repo_paths = future.result()
                     all_repo_paths.extend(repo_paths)
                 except Exception as e:
                     if self.log_manager:
-                        self.log_manager.error(f"Error scanning path {path}: {str(e)}")
+                        self.log_manager.error(f"Error scanning directory: {str(e)}")
 
-        if self.log_manager:
-            if start_time:
-                discovery_time = time() - start_time
-                self.log_manager.debug(
-                    f"Repository discovery completed in {discovery_time:.2f} seconds"
-                )
-            self.log_manager.debug(
-                f"Found {len(all_repo_paths)} repositories to process"
-            )
-            self.log_manager.debug("Starting parallel status processing")
-            if start_time:
-                start_time = time()
-
-        # Step 2: Process all repositories in parallel with specified refresh mode
+        # Process repositories with progress tracking
         repos_data = self.process_repositories_parallel(
-            all_repo_paths, use_ssh_agent, fetch_https_status, mode
+            all_repo_paths, use_ssh_agent, fetch_https_status, mode, progress_callback
         )
 
-        # Return the sorted results
         return sorted(repos_data, key=lambda x: x[0].lower())
 
     def _get_fresh_remote_status(
@@ -314,23 +272,66 @@ class GitManager:
         return repo_status.remote_url, repo_status.get_sync_status()
 
     def refresh_repositories(
-        self, mode: RefreshMode = RefreshMode.SMART
+        self, mode: RefreshMode = RefreshMode.FULL, progress_callback=None
     ) -> List[Tuple[str, RepoStatusLocal, str, SyncStatus]]:
-        """
-        Refresh and return status for all repositories.
+        """Refresh and return status for all repositories."""
+        if self.log_manager:
+            self.log_manager.debug(
+                f"Starting repository refresh with mode: {mode.name}"
+            )
 
-        Args:
-            mode: RefreshMode determining how aggressive the refresh should be:
-                CACHED - Use cache where possible (fast, might be stale)
-                SMART - Always check local status, use cached remote status
-                FULL - Full refresh, ignore all caches
-        """
-        if mode == RefreshMode.FULL:
-            self.cache.invalidate_all()
-            if self.log_manager:
-                self.log_manager.debug("Full refresh requested - clearing all caches")
+        # Get all repositories first
+        all_repo_paths = []
+        for path in self.settings_manager.get_watched_paths():
+            all_repo_paths.extend(
+                RepoStatus.process_path(
+                    path,
+                    self.settings_manager.settings.max_depth,
+                    self.settings_manager.settings.show_hidden,
+                )
+            )
 
-        return self.get_all_repositories(mode)
+        total_repos = len(all_repo_paths)
+        processed = 0
+        results = []
+
+        with ThreadPoolExecutor() as executor:
+            future_to_path = {
+                executor.submit(
+                    self.get_repository_status,  # Using the correct method name
+                    path,
+                    self.settings_manager.settings.use_ssh_agent,
+                    self.settings_manager.settings.fetch_https_status,
+                    mode,
+                ): path
+                for path in all_repo_paths
+            }
+
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    if self.log_manager:
+                        self.log_manager.error(
+                            f"Error processing repo {path}: {str(e)}"
+                        )
+                    results.append(
+                        (
+                            path,
+                            RepoStatusLocal.ERROR,
+                            str(e),
+                            SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
+                        )
+                    )
+
+                # Update progress after each repository
+                processed += 1
+                if progress_callback:
+                    progress_callback(processed, total_repos)
+
+        return sorted(results, key=lambda x: x[0].lower())
 
     def add_watched_path(self, path: str) -> None:
         """Add a new path to watch."""
@@ -348,3 +349,32 @@ class GitManager:
         self.settings_manager.remove_watched_path(path)
         # Invalidate cache for removed path
         self.cache.invalidate_repo(path)
+
+    def _process_single_repo(
+        self,
+        repo_path: str,
+        use_ssh_agent: bool,
+        fetch_https_status: bool,
+        mode: RefreshMode,
+    ) -> Tuple[str, RepoStatusLocal, str, SyncStatus]:
+        """Process a single repository and return its status."""
+        try:
+            repo_status = RepoStatus(
+                repo_path,
+                use_ssh_agent=use_ssh_agent,
+                fetch_https_status=fetch_https_status,
+            )
+            # Just use the existing get_status_info method
+            return repo_status.get_status_info()
+
+        except Exception as e:
+            if self.log_manager:
+                self.log_manager.error(
+                    f"Error processing repository {repo_path}: {str(e)}"
+                )
+            return (
+                repo_path,
+                RepoStatusLocal.ERROR,
+                str(e),
+                SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
+            )

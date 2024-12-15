@@ -201,17 +201,31 @@ class GitTrackerApp(App):
 
     @work(thread=True)
     def refresh_data(self, mode: RefreshMode = RefreshMode.FULL):
-        """Refresh repository data in background"""
+        """Refresh repository data in background."""
         self.log_manager.info(
             f"Starting to refresh repository data (mode: {mode.name})"
         )
 
+        # Show progress at start
+        def start_progress():
+            self.repo_table_search.show_progress(True)
+
+        self.call_after_refresh(start_progress)
+
+        # Progress update callback
+        def update_progress(processed: int, total: int):
+            def do_update():
+                self.repo_table_search.show_progress(True, processed, total)
+
+            self.call_after_refresh(do_update)
+
+        # Load settings and get repositories with progress tracking
         self.settings_manager.load_settings()
-        self.log_manager.info("Settings reloaded.")
+        repos_data = self.git_manager.refresh_repositories(
+            mode=mode, progress_callback=update_progress
+        )
 
-        repos_data = self.git_manager.refresh_repositories(mode=mode)
-        self.log_manager.info(f"Retrieved repository data with mode {mode.name}")
-
+        # Update UI and complete progress
         def update_ui():
             self.repo_table_search.update_table(repos_data)
             self.notify(f"{mode.name} refresh complete!")

@@ -8,6 +8,17 @@ from git_tasks.log_manager import LogManager
 from .repo_data_table import RepoDataTable
 
 
+from textual.widgets import Input, Static
+from textual.containers import Container, Horizontal
+from textual.binding import Binding
+from textual.message import Message
+from textual import on
+
+from git_tasks.log_manager import LogManager
+from .repo_data_table import RepoDataTable
+from .progress_bar import RepoProgressBar
+
+
 class RepoDataTableSearch(Container):
     """A component combining repository table with search functionality."""
 
@@ -17,11 +28,26 @@ class RepoDataTableSearch(Container):
         height: 100%;
     }
 
-    #search {
+    #top-bar {
         dock: top;
-        margin: 1 1;
+        height: auto;
+        margin: 1;
+    }
+
+    #search {
+        width: 60%;
         border: solid $primary;
         background: $boost;
+    }
+
+    #repo-count {
+        width: auto;
+        padding: 0 2;
+        color: $text;
+    }
+
+    #progress-bar {
+        margin: 0 1;
     }
 
     RepoDataTable {
@@ -45,15 +71,45 @@ class RepoDataTableSearch(Container):
 
     def compose(self):
         """Create child widgets."""
-        yield Input(placeholder="Search repositories...", id="search")
+        with Horizontal(id="top-bar"):
+            yield Input(placeholder="Search repositories...", id="search")
+            yield Static("No repositories", id="repo-count")
+        yield RepoProgressBar()
         yield RepoDataTable(
             log_manager=self.log_manager, settings_manager=self.settings_manager
         )
 
+    def show_progress(
+        self, show: bool = True, current: int = 0, total: int = 0
+    ) -> None:
+        """Show or hide the progress bar with optional progress update."""
+        progress_bar = self.query_one(RepoProgressBar)
+        if show:
+            progress_bar.start()
+            if total > 0:
+                progress_bar.advance(current, total)
+        else:
+            progress_bar.complete()
+
+    def update_table(self, repos_data):
+        """Update table with new repository data."""
+        total_repos = len(repos_data)
+
+        # Store the raw data
+        self._raw_data = repos_data
+
+        # Update repository count
+        self._update_repo_count(total_repos)
+
+        # Apply current filter
+        self._apply_filter()
+
+        # Hide progress when done
+        self.show_progress(False)
+
     def on_mount(self):
         """Handle mount event."""
         self.query_one(RepoDataTable).focus()
-        # Set up bindings if settings manager is available
         if self.settings_manager:
             self.bindings = [
                 Binding(
@@ -67,16 +123,10 @@ class RepoDataTableSearch(Container):
                 ]
             ]
 
-    def focus_table(self) -> None:
-        """Focus the data table explicitly."""
-        self.query_one(RepoDataTable).focus()
-
-    @on(Input.Changed, "#search")
-    def on_search_changed(self, event: Input.Changed) -> None:
-        """Handle search input changes."""
-        self.search_text = event.value.strip().lower()
-        self._apply_filter()
-        self.post_message(self.SearchChanged(self.search_text))
+    def _update_repo_count(self, count: int) -> None:
+        """Update the repository count label."""
+        count_label = "repository" if count == 1 else "repositories"
+        self.query_one("#repo-count").update(f"Managing {count} {count_label}")
 
     def _apply_filter(self) -> None:
         """Apply the current search filter to the data."""
@@ -101,6 +151,17 @@ class RepoDataTableSearch(Container):
         if filtered_data:
             table.cursor_coordinate = (0, 0)  # Select first row
 
+    def focus_table(self) -> None:
+        """Focus the data table explicitly."""
+        self.query_one(RepoDataTable).focus()
+
+    @on(Input.Changed, "#search")
+    def on_search_changed(self, event: Input.Changed) -> None:
+        """Handle search input changes."""
+        self.search_text = event.value.strip().lower()
+        self._apply_filter()
+        self.post_message(self.SearchChanged(self.search_text))
+
     async def _handle_shortcut_action(self, action_name: str) -> None:
         """Handle shortcut actions when in search."""
         table = self.query_one(RepoDataTable)
@@ -115,13 +176,6 @@ class RepoDataTableSearch(Container):
             # Forward to table's action directly
             action = getattr(table, f"action_{action_name}")
             await action()
-
-    def update_table(self, repos_data):
-        """Update table with new repository data."""
-        # Store the raw data
-        self._raw_data = repos_data
-        # Apply current filter
-        self._apply_filter()
 
     def action_focus_search(self) -> None:
         """Focus the search input."""
