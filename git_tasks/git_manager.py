@@ -44,7 +44,7 @@ class GitManager:
             return path, False
 
     def scan_directory(
-        self, base_path: str, max_depth: int, show_hidden: bool
+        self, base_path: str, max_depth: int, show_hidden: bool, skip_cached: bool = True
     ) -> List[str]:
         """Scan a directory for git repositories up to max_depth."""
         repos = []
@@ -55,8 +55,11 @@ class GitManager:
                 self.log_manager.warning(f"Path does not exist: {base_path}")
             return repos
 
+        # Get cached repos to skip if needed
+        cached_repos = set(self.cache.get_all_cached_repos().keys()) if skip_cached else set()
+
         # First check if base path itself is a git repo
-        if is_git_repo(base_path):
+        if base_path not in cached_repos and is_git_repo(base_path):
             if self.log_manager:
                 self.log_manager.debug(f"Base path is a git repository: {base_path}")
             repos.append(base_path)
@@ -74,7 +77,7 @@ class GitManager:
                     continue
 
                 full_path = os.path.join(base_path, entry)
-                if os.path.isdir(full_path):
+                if os.path.isdir(full_path) and full_path not in cached_repos:
                     to_check.append(full_path)
 
             if not to_check:
@@ -91,7 +94,7 @@ class GitManager:
                     path = future_to_path[future]
                     try:
                         checked_path, is_repo = future.result()
-                        if is_repo:
+                        if is_repo and checked_path not in cached_repos:
                             if self.log_manager:
                                 self.log_manager.debug(
                                     f"Found git repository: {checked_path}"
@@ -281,57 +284,86 @@ class GitManager:
                 f"Starting repository refresh with mode: {mode.name}"
             )
 
-        # Get all repositories first
+        # Try to use cached data for CACHED and SMART modes
+        if mode in [RefreshMode.CACHED, RefreshMode.SMART]:
+            cached_repos = self.cache.get_all_cached_repos()
+            if cached_repos:
+                results = []
+                for repo_path, cached_status in cached_repos.items():
+                    if os.path.exists(repo_path):
+                        from .status import StatusParser
+                        if mode == RefreshMode.CACHED:
+                            # Use fully cached data
+                            repo_status = StatusParser.parse_repo_status(cached_status.status)
+                            sync_status = StatusParser.parse_sync_status(cached_status.sync_status)
+                        else:  # SMART mode
+                            # Update local status but use cached remote status
+                            try:
+                                repo = RepoStatus(
+                                    repo_path,
+                                    use_ssh_agent=self.settings_manager.settings.use_ssh_agent,
+                                    fetch_https_status=self.settings_manager.settings.fetch_https_status,
+                                )
+                                repo_status = repo.repo_status
+                                sync_status = StatusParser.parse_sync_status(cached_status.sync_status)
+                            except Exception as e:
+                                if self.log_manager:
+                                    self.log_manager.error(f"Error updating local status for {repo_path}: {str(e)}")
+                                continue
+
+                        branch = getattr(cached_status, 'branch', '')
+                        results.append((
+                            repo_path,
+                            repo_status,
+                            cached_status.remote_url,
+                            sync_status,
+                            branch
+                        ))
+                if results:  # Only return if we have valid cached results
+                    return sorted(results, key=lambda x: x[0].lower())
+
+        # If we reach here, we need to do a full repository discovery
+        self.settings_manager.load_settings()
+        watched_paths = self.settings_manager.get_watched_paths()
+        max_depth = self.settings_manager.settings.max_depth
+        show_hidden = self.settings_manager.settings.show_hidden
+        use_ssh_agent = self.settings_manager.settings.use_ssh_agent
+        fetch_https_status = self.settings_manager.settings.fetch_https_status
+
+        # Discovery phase - use ThreadPoolExecutor for parallel scanning
         all_repo_paths = []
-        for path in self.settings_manager.get_watched_paths():
-            all_repo_paths.extend(
-                RepoStatus.process_path(
-                    path,
-                    self.settings_manager.settings.max_depth,
-                    self.settings_manager.settings.show_hidden,
-                )
-            )
-
-        total_repos = len(all_repo_paths)
-        processed = 0
-        results = []
-
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_path = {
                 executor.submit(
-                    self._process_single_repo,
-                    path,
-                    self.settings_manager.settings.use_ssh_agent,
-                    self.settings_manager.settings.fetch_https_status,
-                    mode,
+                    self.scan_directory, 
+                    path, 
+                    max_depth, 
+                    show_hidden,
+                    skip_cached=(mode != RefreshMode.FULL)  # Only skip cached repos for non-FULL modes
                 ): path
-                for path in all_repo_paths
+                for path in watched_paths
             }
 
+            # Collect results
             for future in as_completed(future_to_path):
-                path = future_to_path[future]
                 try:
-                    result = future.result()
-                    results.append(result)
+                    repo_paths = future.result()
+                    all_repo_paths.extend(repo_paths)
                 except Exception as e:
                     if self.log_manager:
-                        self.log_manager.error(
-                            f"Error processing repo {path}: {str(e)}"
-                        )
-                    results.append(
-                        (
-                            path,
-                            RepoStatusLocal.ERROR,
-                            str(e),
-                            SyncStatus(type=SyncStatusType.ERROR, error_message=str(e)),
-                            "Error",
-                        )
-                    )
+                        self.log_manager.error(f"Error scanning directory: {str(e)}")
 
-                # Update progress after each repository
-                processed += 1
-                if progress_callback:
-                    progress_callback(processed, total_repos)
+        # For FULL refresh, include cached repositories not in current paths
+        if mode == RefreshMode.FULL:
+            cached_repos = self.cache.get_all_cached_repos()
+            for repo_path in cached_repos:
+                if repo_path not in all_repo_paths and os.path.exists(repo_path):
+                    all_repo_paths.append(repo_path)
+
+        # Process repositories with progress tracking
+        results = self.process_repositories_parallel(
+            all_repo_paths, use_ssh_agent, fetch_https_status, mode, progress_callback
+        )
 
         return sorted(results, key=lambda x: x[0].lower())
 

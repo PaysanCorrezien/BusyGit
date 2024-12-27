@@ -72,6 +72,9 @@ class GitTrackerApp(App):
 
         # Initialize log view
         self.log_view = None
+        
+        # Track the previous tab
+        self._previous_tab = None
 
         self.log_manager.info("GitTrackerApp initialized with theme: %s", self.theme)
 
@@ -128,13 +131,15 @@ class GitTrackerApp(App):
         self.query_one(Tabs).active = "repositories"
         # Focus the table within the search component
         self.repo_table_search.focus_table()
+        # Do initial load with SMART mode to populate cache
         self.load_initial_data()
 
     @work(thread=True)
     def load_initial_data(self):
         """Load initial repository data in background"""
         self.log_manager.info("Loading initial repository data.")
-        repos_data = self.git_manager.get_all_repositories()
+        # Use SMART mode for initial load to populate cache
+        repos_data = self.git_manager.get_all_repositories(mode=RefreshMode.SMART)
 
         def update_ui():
             self.repo_table_search.update_table(repos_data)
@@ -197,7 +202,15 @@ class GitTrackerApp(App):
         else:  # repositories tab
             repos_content.remove_class("hide")
             self.repo_table_search.focus()
-            self.refresh_data(mode=RefreshMode.CACHED)
+            # If coming back from settings, we need to refresh to reflect any changes
+            if event.tab.id == "repositories" and self._previous_tab == "settings":
+                self.refresh_data(mode=RefreshMode.SMART)
+            # Otherwise only refresh if we have no data
+            elif not self.repo_table_search._raw_data:
+                self.refresh_data(mode=RefreshMode.CACHED)
+
+        # Update previous tab
+        self._previous_tab = event.tab.id
 
     @work(thread=True)
     def refresh_data(self, mode: RefreshMode = RefreshMode.FULL):
