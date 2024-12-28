@@ -4,7 +4,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual import on
 
-from git_tasks.log_manager import LogManager
+from ...git_tasks.log_manager import LogManager
 from .repo_data_table import RepoDataTable
 
 
@@ -14,7 +14,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual import on
 
-from git_tasks.log_manager import LogManager
+from ...git_tasks.log_manager import LogManager
 from .repo_data_table import RepoDataTable
 from .progress_bar import RepoProgressBar
 

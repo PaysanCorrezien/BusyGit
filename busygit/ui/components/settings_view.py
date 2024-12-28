@@ -7,7 +7,7 @@ from textual.binding import Binding
 from textual.reactive import reactive
 import os
 
-from ui.components.path_input import PathValidator
+from .path_input import PathValidator
 
 
 class PathList(ListView):

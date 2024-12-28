@@ -3,9 +3,10 @@ from typing import List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .repo_status import RepoStatus
 from .status import RepoStatusLocal, SyncStatus, SyncStatusType
-from utils import is_git_repo
+from ..utils import is_git_repo
 from .git_cache import GitCache
 from enum import Enum, auto
+from ..config.settings_manager import SettingsManager
 
 
 class RefreshMode(Enum):
@@ -16,7 +17,6 @@ class RefreshMode(Enum):
 
 class GitManager:
     def __init__(self, settings_manager=None, log_manager=None, max_workers=None):
-        from config.settings_manager import SettingsManager
 
         self.settings_manager = settings_manager or SettingsManager()
         self.log_manager = log_manager
@@ -44,7 +44,11 @@ class GitManager:
             return path, False
 
     def scan_directory(
-        self, base_path: str, max_depth: int, show_hidden: bool, skip_cached: bool = True
+        self,
+        base_path: str,
+        max_depth: int,
+        show_hidden: bool,
+        skip_cached: bool = True,
     ) -> List[str]:
         """Scan a directory for git repositories up to max_depth."""
         repos = []
@@ -56,7 +60,9 @@ class GitManager:
             return repos
 
         # Get cached repos to skip if needed
-        cached_repos = set(self.cache.get_all_cached_repos().keys()) if skip_cached else set()
+        cached_repos = (
+            set(self.cache.get_all_cached_repos().keys()) if skip_cached else set()
+        )
 
         # First check if base path itself is a git repo
         if base_path not in cached_repos and is_git_repo(base_path):
@@ -292,10 +298,15 @@ class GitManager:
                 for repo_path, cached_status in cached_repos.items():
                     if os.path.exists(repo_path):
                         from .status import StatusParser
+
                         if mode == RefreshMode.CACHED:
                             # Use fully cached data
-                            repo_status = StatusParser.parse_repo_status(cached_status.status)
-                            sync_status = StatusParser.parse_sync_status(cached_status.sync_status)
+                            repo_status = StatusParser.parse_repo_status(
+                                cached_status.status
+                            )
+                            sync_status = StatusParser.parse_sync_status(
+                                cached_status.sync_status
+                            )
                         else:  # SMART mode
                             # Update local status but use cached remote status
                             try:
@@ -305,20 +316,26 @@ class GitManager:
                                     fetch_https_status=self.settings_manager.settings.fetch_https_status,
                                 )
                                 repo_status = repo.repo_status
-                                sync_status = StatusParser.parse_sync_status(cached_status.sync_status)
+                                sync_status = StatusParser.parse_sync_status(
+                                    cached_status.sync_status
+                                )
                             except Exception as e:
                                 if self.log_manager:
-                                    self.log_manager.error(f"Error updating local status for {repo_path}: {str(e)}")
+                                    self.log_manager.error(
+                                        f"Error updating local status for {repo_path}: {str(e)}"
+                                    )
                                 continue
 
-                        branch = getattr(cached_status, 'branch', '')
-                        results.append((
-                            repo_path,
-                            repo_status,
-                            cached_status.remote_url,
-                            sync_status,
-                            branch
-                        ))
+                        branch = getattr(cached_status, "branch", "")
+                        results.append(
+                            (
+                                repo_path,
+                                repo_status,
+                                cached_status.remote_url,
+                                sync_status,
+                                branch,
+                            )
+                        )
                 if results:  # Only return if we have valid cached results
                     return sorted(results, key=lambda x: x[0].lower())
 
@@ -335,11 +352,13 @@ class GitManager:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_path = {
                 executor.submit(
-                    self.scan_directory, 
-                    path, 
-                    max_depth, 
+                    self.scan_directory,
+                    path,
+                    max_depth,
                     show_hidden,
-                    skip_cached=(mode != RefreshMode.FULL)  # Only skip cached repos for non-FULL modes
+                    skip_cached=(
+                        mode != RefreshMode.FULL
+                    ),  # Only skip cached repos for non-FULL modes
                 ): path
                 for path in watched_paths
             }

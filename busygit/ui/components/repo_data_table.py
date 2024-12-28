@@ -4,9 +4,9 @@ from rich.text import Text
 import sys
 import os
 import subprocess
-from git_tasks.log_manager import LogManager
-from git_tasks.status import RepoStatusLocal, SyncStatusType, SyncStatus
-from git_tasks.remote_convert import RemoteConverter
+from ...git_tasks.log_manager import LogManager
+from ...git_tasks.status import RepoStatusLocal, SyncStatusType, SyncStatus
+from ...git_tasks.remote_convert import RemoteConverter
 
 
 class RepoDataTable(DataTable):

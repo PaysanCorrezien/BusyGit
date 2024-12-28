@@ -13,7 +13,7 @@ class SettingsManager:
 
     def __init__(self, config_path: str = None):
         self.config_path = config_path or os.path.expanduser(
-            "~/.config/git-tracker/config.json"
+            "~/.config/busygit/config.json"
         )
         self.settings = Settings()  # Start with defaults from Settings class
         self.load_settings()

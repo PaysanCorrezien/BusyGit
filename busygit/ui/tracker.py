@@ -1,19 +1,18 @@
+from ..config.settings_manager import SettingsManager
+from ..git_tasks.git_manager import GitManager
+from .components.settings_view import (
+    SettingsView,
+)  # Note: single dot for same directory
+from ..git_tasks.log_manager import LogManager
+from .components.log_view import LogView
+from ..git_tasks.git_manager import RefreshMode
+from .components.repo_data_table_search import RepoDataTableSearch
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Header, Footer, Tabs, Tab, Input
 from textual.binding import Binding
 from textual import work
-from config.settings_manager import SettingsManager
-from git_tasks.git_manager import GitManager
-from git_tasks import RepoStatus
-from ui.components.settings_view import SettingsView
-from ui.toast_app import ToastApp
 from textual.message import Message
-from textual import events
-from git_tasks.log_manager import LogManager
-from ui.components.log_view import LogView
-from git_tasks.git_manager import RefreshMode
-from ui.components.repo_data_table_search import RepoDataTableSearch
 
 
 class ThemeChanged(Message):
@@ -72,7 +71,7 @@ class GitTrackerApp(App):
 
         # Initialize log view
         self.log_view = None
-        
+
         # Track the previous tab
         self._previous_tab = None
 
