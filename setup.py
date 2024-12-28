@@ -11,7 +11,7 @@ setup(
     install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "busygit=main:main",  # This assumes your main() function is in main.py
+            "busygit=busygit.main:main",  # Updated entry point
         ],
     },
     author="PaysanCorrezien",

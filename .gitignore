@@ -63,3 +63,4 @@ __pycache__/
 .env.*.local
 .aider_docs/*
 .aider
+result/*
