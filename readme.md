@@ -2,6 +2,73 @@
 
 Git Tracker TUI is a terminal user interface (TUI) application built with Python and the Textual library. It allows users to monitor multiple Git repositories, either by specifying individual repositories or by watching directories containing multiple repositories. The application uses a configuration file to store the list of directories and repositories to monitor.
 
+## Installation
+
+You can install BusyGit using one of these methods:
+
+### Using Pip
+
+Install directly from GitHub:
+
+```bash
+pip install git+https://github.com/PaysanCorrezien/BusyGit.git
+```
+
+Then run with:
+
+```bash
+busygit
+```
+
+### Using Nix
+
+#### Nix run
+
+```bash
+nix run github:PaysanCorrezien/BusyGit
+```
+
+#### Flakes
+
+```nix
+{
+  inputs.busygit.url = "github:PaysanCorrezien/BusyGit";
+
+  outputs = { self, nixpkgs, busygit }: {
+    nixosConfigurations.mysystem = nixpkgs.lib.nixosSystem {
+      modules = [
+        {
+          nixpkgs.overlays = [ busygit.overlays.default ];
+          environment.systemPackages = with pkgs; [
+            busygit
+          ];
+        }
+      ];
+    };
+  };
+}
+```
+
+### Manual Installation
+
+Clone and install from source:
+
+```bash
+git clone https://github.com/PaysanCorrezien/BusyGit.git
+cd BusyGit
+python -m venv .venv
+source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
+pip install -r requirements.txt
+python -m busygit.main
+```
+
+## Features
+
+```
+
+Would you like me to add any additional details or modify any of the installation instructions?
+
+
 ## Features
 
 - **Directory Monitoring**: Watch specified directories for Git repositories.
@@ -64,3 +131,4 @@ Contributions are welcome! Please fork the repository and submit a pull request.
 ## License
 
 This project is licensed under the MIT License.
+```
